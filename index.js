@@ -1,15 +1,20 @@
 require('dotenv').config();
-console.log("TOKEN from env:", process.env.TOKEN ? "✅ Loaded" : "❌ Missing");
+
+if (!process.env.TOKEN) {
+  console.error("❌ No TOKEN found! Did you set it in Railway Variables?");
+  process.exit(1); // stop instead of crashing weirdly
+}
 
 const { Client, GatewayIntentBits } = require('discord.js');
-require('dotenv').config();
+
+console.log("✅ TOKEN Loaded. Starting bot...");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once('ready', () => {
@@ -32,7 +37,10 @@ client.on('messageCreate', (message) => {
   }
 });
 
-client.login(process.env.TOKEN);
+// catch login errors instead of crashing
+client.login(process.env.TOKEN).catch(err => {
+  console.error("❌ Failed to login:", err.message);
+});
 
 
 
