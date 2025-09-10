@@ -41,8 +41,3 @@ client.on('messageCreate', (message) => {
 client.login(process.env.TOKEN).catch(err => {
   console.error("❌ Failed to login:", err.message);
 });
-
-
-
-
-
