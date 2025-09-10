@@ -1,3 +1,6 @@
+require('dotenv').config();
+console.log("TOKEN from env:", process.env.TOKEN ? "✅ Loaded" : "❌ Missing");
+
 const { Client, GatewayIntentBits } = require('discord.js');
 require('dotenv').config();
 
@@ -30,6 +33,7 @@ client.on('messageCreate', (message) => {
 });
 
 client.login(process.env.TOKEN);
+
 
 
 
