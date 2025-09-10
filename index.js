@@ -1,13 +1,6 @@
 require('dotenv').config();
 
-if (!process.env.TOKEN) {
-  console.error("❌ No TOKEN found! Did you set it in Railway Variables?");
-  process.exit(1); // stop instead of crashing weirdly
-}
-
 const { Client, GatewayIntentBits } = require('discord.js');
-
-console.log("✅ TOKEN Loaded. Starting bot...");
 
 const client = new Client({
   intents: [
@@ -37,7 +30,3 @@ client.on('messageCreate', (message) => {
   }
 });
 
-// catch login errors instead of crashing
-client.login(process.env.TOKEN).catch(err => {
-  console.error("❌ Failed to login:", err.message);
-});
