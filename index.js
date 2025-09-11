@@ -12,6 +12,7 @@ const client = new Client({
 
 // --- CONFIG ---
 const USER_FILE = './users.json';
+const MAX_ACTIVITY = 50; // Keep last 50 events
 const RANKS = [
   "Motley",
   "Trickster",
@@ -21,7 +22,16 @@ const RANKS = [
   "Fool's Regent",
   "The Jester's Hand"
 ];
-const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999]; 
+const RANK_EMOJI = {
+  "Motley": "🃏",
+  "Trickster": "🎩",
+  "Prankmaster": "🤡",
+  "Harlequin": "🎭",
+  "Jester Knight": "👑",
+  "Fool's Regent": "🏰",
+  "The Jester's Hand": "✨"
+};
+const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999];
 
 // --- UTILITIES ---
 function loadUsers() {
@@ -40,6 +50,12 @@ function getRank(doubloons) {
   return "Motley";
 }
 
+function addActivity(users, text) {
+  if (!users.activity) users.activity = [];
+  users.activity.unshift(text);
+  if (users.activity.length > MAX_ACTIVITY) users.activity.pop();
+}
+
 // --- ROLE MANAGEMENT ---
 async function assignRole(member, rank) {
   try {
@@ -52,8 +68,9 @@ async function assignRole(member, rank) {
         mentionable: true
       });
     }
-    // Remove old rank roles
-    const oldRanks = RANKS.filter(r => r !== rank).map(r => guild.roles.cache.find(role => role.name === r)).filter(Boolean);
+    const oldRanks = RANKS.filter(r => r !== rank)
+      .map(r => guild.roles.cache.find(role => role.name === r))
+      .filter(Boolean);
     await member.roles.remove(oldRanks).catch(() => {});
     await member.roles.add(role);
   } catch (err) {
@@ -77,6 +94,7 @@ client.on('messageCreate', async (message) => {
   if (message.content === '!join') {
     if (!users[id]) {
       users[id] = { rank: "Motley", doubloons: 10, favor: false, favorExpires: null };
+      addActivity(users, `🎭 ${message.author.username} joined the Court!`);
       saveUsers(users);
       await assignRole(message.member, "Motley");
       return message.channel.send(`🎭 Welcome to the Jester's Court, ${message.author.username}! You are now a Motley. 🃏`);
@@ -88,7 +106,9 @@ client.on('messageCreate', async (message) => {
   // --- CHECK RANK ---
   if (message.content === '!rank') {
     if (!users[id]) return message.channel.send("You must !join first.");
-    return message.channel.send(`Your rank: **${users[id].rank}**`);
+    const rank = users[id].rank;
+    const emoji = RANK_EMOJI[rank] || "";
+    return message.channel.send(`Your rank: ${emoji} **${rank}**`);
   }
 
   // --- CHECK DOUBLOONS ---
@@ -116,6 +136,8 @@ client.on('messageCreate', async (message) => {
     users[mention.id].rank = getRank(users[mention.id].doubloons);
     users[id].rank = getRank(users[id].doubloons);
 
+    addActivity(users, `💰 ${message.author.username} gifted ${amount} Doubloons to ${mention.username}!`);
+
     saveUsers(users);
     await assignRole(message.member, users[id].rank);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
@@ -136,24 +158,64 @@ client.on('messageCreate', async (message) => {
 
     users[mention.id].favor = true;
     users[mention.id].favorExpires = Date.now() + hours * 3600000;
-    saveUsers(users);
+    addActivity(users, `👑 The Jester bestowed Favor upon ${mention.username} for ${hours} hours!`);
 
+    saveUsers(users);
     return message.channel.send(`👑 The Jester bestowed their Favor upon ${mention.username} for **${hours} hours**!`);
   }
 
   // --- OWNER CREATIVE MODE ---
   if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!give')) {
-    // Usage: !give @user amount
     const args = message.content.split(' ');
     const mention = message.mentions.users.first();
     const amount = parseInt(args[2]);
     if (!mention || isNaN(amount)) return message.channel.send("Usage: !give @user amount");
     if (!users[mention.id]) users[mention.id] = { rank: "Motley", doubloons: 0, favor: false, favorExpires: null };
+
     users[mention.id].doubloons += amount;
     users[mention.id].rank = getRank(users[mention.id].doubloons);
+    addActivity(users, `✨ Owner magic! Gave ${amount} Doubloons to ${mention.username}!`);
+
     saveUsers(users);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
+
     return message.channel.send(`✨ Owner magic! Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
+  }
+
+  // --- LEADERBOARD ---
+  if (message.content === '!leaderboard') {
+    const leaderboard = Object.entries(users)
+      .filter(([k,v]) => k !== 'activity')
+      .sort((a,b) => b[1].doubloons - a[1].doubloons)
+      .slice(0, 10)
+      .map(([k,v], i) => `${i+1}. ${v.rank} ${RANK_EMOJI[v.rank] || ""} <@${k}> — 💰 ${v.doubloons}`);
+    if (!leaderboard.length) return message.channel.send("No users yet!");
+    return message.channel.send("🏆 **Leaderboard**\n" + leaderboard.join('\n'));
+  }
+
+  // --- ACTIVITY FEED ---
+  if (message.content === '!activity') {
+    const act = users.activity || [];
+    if (!act.length) return message.channel.send("No activity yet.");
+    return message.channel.send("📜 **Recent Court Activity**\n" + act.slice(0, 10).join('\n'));
+  }
+
+  // --- PRANK EVENT (OWNER ONLY) ---
+  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!prank')) {
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const amount = parseInt(args[2]) || 10;
+    if (!mention) return message.channel.send("Usage: !prank @user amount");
+    if (!users[mention.id]) return message.channel.send("User not found!");
+
+    users[mention.id].doubloons = Math.max(0, users[mention.id].doubloons - amount);
+    users[mention.id].rank = getRank(users[mention.id].doubloons);
+    addActivity(users, `😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
+
+    saveUsers(users);
+    await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
+
+    return message.channel.send(`😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
   }
 });
 
@@ -165,6 +227,7 @@ setInterval(() => {
     if (users[id].favor && users[id].favorExpires && Date.now() > users[id].favorExpires) {
       users[id].favor = false;
       users[id].favorExpires = null;
+      addActivity(users, `⏰ Favor expired for <@${id}>`);
       changed = true;
     }
   }
