@@ -32,6 +32,7 @@ const RANK_EMOJI = {
   "The Jester's Hand": "✨"
 };
 const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999];
+const JESTER_ID = process.env.OWNER_ID; // <- hardcoded "eternal Jester"
 
 // --- UTILITIES ---
 function loadUsers() {
@@ -43,7 +44,8 @@ function saveUsers(users) {
   fs.writeFileSync(USER_FILE, JSON.stringify(users, null, 2));
 }
 
-function getRank(doubloons) {
+function getRank(doubloons, id) {
+  if (id === JESTER_ID) return "Court Jester (Founder)";
   for (let i = RANKS.length - 1; i >= 0; i--) {
     if (doubloons >= RANK_THRESHOLDS[i]) return RANKS[i];
   }
@@ -61,6 +63,22 @@ async function assignRole(member, rank) {
   if (!member) return;
   try {
     const guild = member.guild;
+
+    // Jester special role
+    if (member.id === JESTER_ID) {
+      let jesterRole = guild.roles.cache.find(r => r.name === "Jester");
+      if (!jesterRole) {
+        jesterRole = await guild.roles.create({
+          name: "Jester",
+          color: 'BLUE',
+          mentionable: true
+        });
+      }
+      await member.roles.add(jesterRole).catch(() => {});
+      return; // don't assign normal ranks
+    }
+
+    // Normal rank system
     let role = guild.roles.cache.find(r => r.name === rank);
     if (!role) {
       role = await guild.roles.create({
@@ -73,7 +91,7 @@ async function assignRole(member, rank) {
       .map(r => guild.roles.cache.find(role => role.name === r))
       .filter(Boolean);
     await member.roles.remove(oldRanks).catch(() => {});
-    await member.roles.add(role);
+    await member.roles.add(role).catch(() => {});
   } catch (err) {
     console.error("Role assignment error:", err);
   }
@@ -91,7 +109,7 @@ async function assignRulerRole(member) {
         mentionable: true
       });
     }
-    // Remove old Ruler from guild
+    // Remove old Ruler
     guild.members.cache.forEach(m => {
       if (m.roles.cache.has(role.id) && m.id !== member.id) m.roles.remove(role).catch(() => {});
     });
@@ -113,6 +131,12 @@ client.on('messageCreate', async (message) => {
   const users = loadUsers();
   const id = message.author.id;
 
+  // Ensure Jester always exists in file
+  if (id === JESTER_ID && !users[id]) {
+    users[id] = { rank: "Court Jester (Founder)", doubloons: 999999, favor: true, favorExpires: null };
+    saveUsers(users);
+  }
+
   // --- JOIN ---
   if (message.content === '!join') {
     if (!users[id]) {
@@ -129,8 +153,8 @@ client.on('messageCreate', async (message) => {
   // --- CHECK RANK ---
   if (message.content === '!rank') {
     if (!users[id]) return message.channel.send("You must !join first.");
-    const rank = users[id].rank;
-    const emoji = RANK_EMOJI[rank] || "";
+    const rank = getRank(users[id].doubloons, id);
+    const emoji = RANK_EMOJI[rank] || (id === JESTER_ID ? "🤡" : "");
     return message.channel.send(`Your rank: ${emoji} **${rank}**`);
   }
 
@@ -151,12 +175,12 @@ client.on('messageCreate', async (message) => {
     if (!mention) return message.channel.send("Mention a valid user to gift.");
     if (isNaN(amount) || amount <= 0) return message.channel.send("Invalid amount.");
     if (!users[mention.id]) return message.channel.send("This user is not in the Court.");
-    if (users[id].doubloons < amount) return message.channel.send("You don't have enough Doubloons.");
+    if (users[id].doubloons < amount && id !== JESTER_ID) return message.channel.send("You don't have enough Doubloons.");
 
-    users[id].doubloons -= amount;
+    if (id !== JESTER_ID) users[id].doubloons -= amount;
     users[mention.id].doubloons += amount;
-    users[mention.id].rank = getRank(users[mention.id].doubloons);
-    users[id].rank = getRank(users[id].doubloons);
+    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
+    users[id].rank = getRank(users[id].doubloons, id);
     addActivity(users, `💰 ${message.author.username} gifted ${amount} Doubloons to ${mention.username}!`);
 
     saveUsers(users);
@@ -168,8 +192,8 @@ client.on('messageCreate', async (message) => {
 
   // --- FAVOR ---
   if (message.content.startsWith('!favor')) {
-    const canGiveFavor = message.author.id === process.env.OWNER_ID ||
-      (message.guild.members.cache.get(message.author.id)?.roles.cache.some(r => r.name === 'Ruler'));
+    const canGiveFavor = id === JESTER_ID ||
+      (message.guild.members.cache.get(id)?.roles.cache.some(r => r.name === 'Ruler'));
     if (!canGiveFavor) return;
     const args = message.content.split(' ');
     if (args.length < 3) return message.channel.send("Usage: !favor @user durationInHours");
@@ -188,8 +212,8 @@ client.on('messageCreate', async (message) => {
   }
 
   // --- OWNER / RULER CREATIVE MODE ---
-  const isPrivileged = message.author.id === process.env.OWNER_ID ||
-    (message.guild.members.cache.get(message.author.id)?.roles.cache.some(r => r.name === 'Ruler'));
+  const isPrivileged = id === JESTER_ID ||
+    (message.guild.members.cache.get(id)?.roles.cache.some(r => r.name === 'Ruler'));
 
   if (isPrivileged && message.content.startsWith('!give')) {
     const args = message.content.split(' ');
@@ -199,7 +223,7 @@ client.on('messageCreate', async (message) => {
     if (!users[mention.id]) users[mention.id] = { rank: "Motley", doubloons: 0, favor: false, favorExpires: null };
 
     users[mention.id].doubloons += amount;
-    users[mention.id].rank = getRank(users[mention.id].doubloons);
+    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
     addActivity(users, `✨ ${message.author.username} gave ${amount} Doubloons to ${mention.username}!`);
 
     saveUsers(users);
@@ -207,8 +231,8 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`✨ Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
   }
 
-  // --- RULER ASSIGNMENT (OWNER ONLY) ---
-  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!ruler')) {
+  // --- RULER ASSIGNMENT (JESTER ONLY) ---
+  if (id === JESTER_ID && message.content.startsWith('!ruler')) {
     const mention = message.mentions.members.first();
     if (!mention) return message.channel.send("Usage: !ruler @user");
     await assignRulerRole(mention);
@@ -223,7 +247,10 @@ client.on('messageCreate', async (message) => {
       .filter(([k,v]) => k !== 'activity')
       .sort((a,b) => b[1].doubloons - a[1].doubloons)
       .slice(0, 10)
-      .map(([k,v], i) => `${i+1}. ${v.rank} ${RANK_EMOJI[v.rank] || ""} <@${k}> — 💰 ${v.doubloons}`);
+      .map(([k,v], i) => {
+        const rank = getRank(v.doubloons, k);
+        return `${i+1}. ${rank} ${RANK_EMOJI[rank] || ""} <@${k}> — 💰 ${v.doubloons}`;
+      });
     if (!leaderboard.length) return message.channel.send("No users yet!");
     return message.channel.send("🏆 **Leaderboard**\n" + leaderboard.join('\n'));
   }
@@ -244,7 +271,7 @@ client.on('messageCreate', async (message) => {
     if (!users[mention.id]) return message.channel.send("User not found!");
 
     users[mention.id].doubloons = Math.max(0, users[mention.id].doubloons - amount);
-    users[mention.id].rank = getRank(users[mention.id].doubloons);
+    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
     addActivity(users, `😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
 
     saveUsers(users);
@@ -277,4 +304,3 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(() => console.log("✅ Login successful!"))
   .catch(err => console.error("❌ Failed to login:", err));
-
