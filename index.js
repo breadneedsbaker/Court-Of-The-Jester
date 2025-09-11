@@ -270,4 +270,3 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(()=>console.log('✅ Login successful!'))
   .catch(err=>console.error('❌ Login failed:', err));
-
