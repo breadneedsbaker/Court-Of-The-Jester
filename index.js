@@ -309,6 +309,31 @@ client.on('messageCreate', async (message) => {
     await setupRoles(message.guild);
     return message.channel.send("📜 Roles ensured.");
   }
+
+  // help
+  if (message.content === '!help'){
+    return message.channel.send(
+      `📖 **JesterBot Commands**\n\n` +
+      `🎭 **Player Commands**\n` +
+      `\`!join\` → Join the Court.\n` +
+      `\`!profile\` → View your stats.\n` +
+      `\`!daily\` → Claim 20 daily doubloons.\n` +
+      `\`!shop\` → View shop items.\n` +
+      `\`!buy <mask name>\` → Buy a mask.\n` +
+      `\`!coinflip <amount>\` → Gamble doubloons (Trickster+).\n\n` +
+      `✨ **Privileged Commands** (Ruler / The Jester's Hand / Founder)\n` +
+      `\`!give @user <amount>\` → Give doubloons.\n` +
+      `\`!giveexp @user <amount>\` → Grant EXP.\n` +
+      `\`!giverank @user <rank>\` → Set a player’s rank.\n` +
+      `\`!giveprop @user <prop>\` → Give a prop item.\n` +
+      `\`!favor @user <amount>\` → Grant Favor.\n\n` +
+      `👑 **Founder Only**\n` +
+      `\`!ruler @user\` → Crown a Ruler.\n\n` +
+      `🛠️ **Setup**\n` +
+      `\`!createroles\` → Ensure all Court roles exist.\n\n` +
+      `Have fun, Fool 🎭`
+    );
+  }
 });
 
 // --- login ---
