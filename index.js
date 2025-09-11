@@ -19,9 +19,10 @@ const RANKS = [
   "Prankmaster",
   "Harlequin",
   "Jester Knight",
-  "Fool's Regent",
-  "The Jester's Hand"
+  "Fool's Regent",       // Elite (local only)
+  "The Jester's Hand"    // Elite (local only)
 ];
+const ELITE_RANKS = ["Fool's Regent", "The Jester's Hand"]; // unsynced
 const RANK_EMOJI = {
   "Motley": "🃏",
   "Trickster": "🎩",
@@ -75,15 +76,15 @@ async function assignRole(member, rank) {
         });
       }
       await member.roles.add(jesterRole).catch(() => {});
-      return; // don't assign normal ranks
+      return;
     }
 
-    // Normal rank system
+    // Normal ranks
     let role = guild.roles.cache.find(r => r.name === rank);
     if (!role) {
       role = await guild.roles.create({
         name: rank,
-        color: 'PURPLE',
+        color: ELITE_RANKS.includes(rank) ? 'GOLD' : 'PURPLE',
         mentionable: true
       });
     }
@@ -109,7 +110,6 @@ async function assignRulerRole(member) {
         mentionable: true
       });
     }
-    // Remove old Ruler
     guild.members.cache.forEach(m => {
       if (m.roles.cache.has(role.id) && m.id !== member.id) m.roles.remove(role).catch(() => {});
     });
@@ -131,7 +131,6 @@ client.on('messageCreate', async (message) => {
   const users = loadUsers();
   const id = message.author.id;
 
-  // Ensure Jester always exists in file
   if (id === JESTER_ID && !users[id]) {
     users[id] = { rank: "Court Jester (Founder)", doubloons: 999999, favor: true, favorExpires: null };
     saveUsers(users);
@@ -150,7 +149,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // --- CHECK RANK ---
+  // --- RANK ---
   if (message.content === '!rank') {
     if (!users[id]) return message.channel.send("You must !join first.");
     const rank = getRank(users[id].doubloons, id);
@@ -158,7 +157,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Your rank: ${emoji} **${rank}**`);
   }
 
-  // --- CHECK DOUBLOONS ---
+  // --- DOUBLOONS ---
   if (message.content === '!doubloons') {
     if (!users[id]) return message.channel.send("You must !join first.");
     return message.channel.send(`You have 💰 **${users[id].doubloons} Doubloons**`);
@@ -179,10 +178,13 @@ client.on('messageCreate', async (message) => {
 
     if (id !== JESTER_ID) users[id].doubloons -= amount;
     users[mention.id].doubloons += amount;
-    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
-    users[id].rank = getRank(users[id].doubloons, id);
-    addActivity(users, `💰 ${message.author.username} gifted ${amount} Doubloons to ${mention.username}!`);
 
+    if (!ELITE_RANKS.includes(users[mention.id].rank))
+      users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
+    if (!ELITE_RANKS.includes(users[id].rank))
+      users[id].rank = getRank(users[id].doubloons, id);
+
+    addActivity(users, `💰 ${message.author.username} gifted ${amount} Doubloons to ${mention.username}!`);
     saveUsers(users);
     await assignRole(message.member, users[id].rank);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
@@ -211,7 +213,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`👑 Favor bestowed upon ${mention.username} for **${hours} hours**!`);
   }
 
-  // --- OWNER / RULER CREATIVE MODE ---
+  // --- PRIVILEGED ACTIONS ---
   const isPrivileged = id === JESTER_ID ||
     (message.guild.members.cache.get(id)?.roles.cache.some(r => r.name === 'Ruler'));
 
@@ -223,7 +225,8 @@ client.on('messageCreate', async (message) => {
     if (!users[mention.id]) users[mention.id] = { rank: "Motley", doubloons: 0, favor: false, favorExpires: null };
 
     users[mention.id].doubloons += amount;
-    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
+    if (!ELITE_RANKS.includes(users[mention.id].rank))
+      users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
     addActivity(users, `✨ ${message.author.username} gave ${amount} Doubloons to ${mention.username}!`);
 
     saveUsers(users);
@@ -231,7 +234,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`✨ Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
   }
 
-  // --- RULER ASSIGNMENT (JESTER ONLY) ---
+  // --- RULER (JESTER ONLY) ---
   if (id === JESTER_ID && message.content.startsWith('!ruler')) {
     const mention = message.mentions.members.first();
     if (!mention) return message.channel.send("Usage: !ruler @user");
@@ -255,14 +258,14 @@ client.on('messageCreate', async (message) => {
     return message.channel.send("🏆 **Leaderboard**\n" + leaderboard.join('\n'));
   }
 
-  // --- ACTIVITY FEED ---
+  // --- ACTIVITY ---
   if (message.content === '!activity') {
     const act = users.activity || [];
     if (!act.length) return message.channel.send("No activity yet.");
     return message.channel.send("📜 **Recent Court Activity**\n" + act.slice(0, 10).join('\n'));
   }
 
-  // --- PRANK EVENT ---
+  // --- PRANK ---
   if (isPrivileged && message.content.startsWith('!prank')) {
     const args = message.content.split(' ');
     const mention = message.mentions.users.first();
@@ -271,7 +274,8 @@ client.on('messageCreate', async (message) => {
     if (!users[mention.id]) return message.channel.send("User not found!");
 
     users[mention.id].doubloons = Math.max(0, users[mention.id].doubloons - amount);
-    users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
+    if (!ELITE_RANKS.includes(users[mention.id].rank))
+      users[mention.id].rank = getRank(users[mention.id].doubloons, mention.id);
     addActivity(users, `😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
 
     saveUsers(users);
@@ -279,41 +283,31 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
   }
 
-  // --- CREATE ROLES (NEW COMMAND) ---
+  // --- CREATE ROLES ---
   if (isPrivileged && message.content === '!createroles') {
     for (const rank of RANKS) {
       let role = message.guild.roles.cache.find(r => r.name === rank);
       if (!role) {
         await message.guild.roles.create({
           name: rank,
-          color: 'PURPLE',
+          color: ELITE_RANKS.includes(rank) ? 'GOLD' : 'PURPLE',
           mentionable: true
         });
       }
     }
-    // Ensure Jester role exists
     let jesterRole = message.guild.roles.cache.find(r => r.name === "Jester");
     if (!jesterRole) {
-      await message.guild.roles.create({
-        name: "Jester",
-        color: 'BLUE',
-        mentionable: true
-      });
+      await message.guild.roles.create({ name: "Jester", color: 'BLUE', mentionable: true });
     }
-    // Ensure Ruler role exists
     let rulerRole = message.guild.roles.cache.find(r => r.name === "Ruler");
     if (!rulerRole) {
-      await message.guild.roles.create({
-        name: "Ruler",
-        color: 'GOLD',
-        mentionable: true
-      });
+      await message.guild.roles.create({ name: "Ruler", color: 'GOLD', mentionable: true });
     }
     return message.channel.send("✅ All rank roles, Jester, and Ruler have been created (if missing)!");
   }
 });
 
-// --- FAVOR EXPIRATION CHECK ---
+// --- FAVOR EXPIRATION ---
 setInterval(() => {
   const users = loadUsers();
   let changed = false;
