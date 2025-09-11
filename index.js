@@ -1,4 +1,4 @@
-// index.js — full JesterBot system with drops/pick and kick
+// index.js — full JesterBot system with drops/pick/kick and trade
 require('dotenv').config();
 const fs = require('fs');
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
@@ -16,11 +16,9 @@ const client = new Client({
 
 const USER_FILE = './users.json';
 const MAX_ACTIVITY = 50;
-const DAILY_AMOUNT = 20;
+const DAILY_AMOUNT = 20n; // use BigInt for very large numbers
+let droppedDoubloons = null; // { amount: BigInt, messageId }
 
-let droppedDoubloons = null; // Track dropped doubloons {amount, messageId}
-
-// --- Ranks & Colors ---
 const RANKS = [
   "Motley","Trickster","Prankmaster","Harlequin",
   "Jester Knight","Fool's Regent","The Jester's Hand"
@@ -48,12 +46,12 @@ const RANK_EMOJI = {
 const EXP_THRESHOLDS = [0,200,600,1200,2000,4000,7000];
 const JESTER_ID = process.env.OWNER_ID;
 
-// --- Items ---
+// Items
 const SHOP_ITEMS = {
   masks: [
-    {name:"Comedy Mask", price:50, boost:1.1},
-    {name:"Tragedy Mask", price:50, boost:1.2},
-    {name:"Masquerade Mask", price:100, boost:1.3},
+    {name:"Comedy Mask", price:50n, boost:1.1},
+    {name:"Tragedy Mask", price:50n, boost:1.2},
+    {name:"Masquerade Mask", price:100n, boost:1.3},
   ],
   props: [
     {name:"Scepter", rank:"Jester Knight"},
@@ -62,15 +60,30 @@ const SHOP_ITEMS = {
   ]
 };
 
-// --- storage helpers ---
+// --- storage ---
 function loadUsers(){
   if (!fs.existsSync(USER_FILE)) fs.writeFileSync(USER_FILE,'{}');
-  try { return JSON.parse(fs.readFileSync(USER_FILE)); }
-  catch { fs.writeFileSync(USER_FILE,'{}'); return {}; }
+  try { 
+    const data = JSON.parse(fs.readFileSync(USER_FILE));
+    // convert doubloons to BigInt if needed
+    for (const uid in data) {
+      if (data[uid].doubloons !== undefined) data[uid].doubloons = BigInt(data[uid].doubloons);
+    }
+    return data; 
+  } catch { 
+    fs.writeFileSync(USER_FILE,'{}'); 
+    return {}; 
+  }
 }
-function saveUsers(users){ fs.writeFileSync(USER_FILE, JSON.stringify(users, null, 2)); }
+function saveUsers(users){ 
+  const data = {};
+  for (const uid in users){
+    data[uid] = {...users[uid], doubloons: users[uid].doubloons.toString()};
+  }
+  fs.writeFileSync(USER_FILE, JSON.stringify(data, null, 2)); 
+}
 
-// --- rank helpers ---
+// --- rank ---
 function getRank(exp, id){
   if (id === JESTER_ID) return "Court Jester (Founder)";
   for (let i = RANKS.length-1; i>=0; i--){
@@ -84,7 +97,7 @@ function addActivity(users, text){
   if (users.activity.length > MAX_ACTIVITY) users.activity.pop();
 }
 
-// --- guild/member helpers ---
+// --- guild helpers ---
 async function getGuildMember(guild, userId){
   if (!guild) return null;
   let member = guild.members.cache.get(userId);
@@ -121,14 +134,14 @@ async function assignRole(member, rank){
 
 async function assignRulerRole(member){
   let role = member.guild.roles.cache.find(r => r.name === 'Ruler');
-  if (!role) role = await member.guild.roles.create({ name:'Ruler', color:RANK_COLORS["Ruler"], mentionable:true });
+  if (!role) role = await member.roles.create({ name:'Ruler', color:RANK_COLORS["Ruler"], mentionable:true });
   member.guild.members.cache.forEach(m => {
     if (m.roles.cache.has(role.id) && m.id !== member.id) m.roles.remove(role).catch(()=>{});
   });
   await member.roles.add(role);
 }
 
-// --- reaction -> EXP ---
+// --- reactions ---
 client.on('messageReactionAdd', async (reaction, user) => {
   if (reaction.partial) await reaction.fetch();
   if (reaction.message.partial) await reaction.message.fetch();
@@ -137,7 +150,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
   const users = loadUsers();
   const targetId = reaction.message.author.id;
-  if (!users[targetId]) users[targetId] = {exp:0,doubloons:0,favor:0,items:{},lastDaily:0};
+  if (!users[targetId]) users[targetId] = {exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
 
   users[targetId].exp += 20;
   users[targetId].rank = getRank(users[targetId].exp, targetId);
@@ -155,10 +168,10 @@ client.on('messageCreate', async (message) => {
   const id = message.author.id;
   const isPrivileged = id === JESTER_ID || message.member.roles.cache.some(r => ["Ruler","The Jester's Hand"].includes(r.name));
 
-  // join
+  // !join
   if (message.content === '!join'){
     if (!users[id]){
-      users[id] = { rank:"Motley", exp:0, doubloons:10, favor:0, items:{}, lastDaily:0 };
+      users[id] = { rank:"Motley", exp:0, doubloons:10n, favor:0, items:{}, lastDaily:0 };
       addActivity(users, `🎭 ${message.author.username} joined the Court!`);
       saveUsers(users);
       await assignRole(message.member, "Motley");
@@ -166,7 +179,7 @@ client.on('messageCreate', async (message) => {
     } else return message.channel.send("You are already in the Court!");
   }
 
-  // profile
+  // !profile
   if (message.content === '!profile'){
     if (!users[id]) return message.channel.send("You must !join first.");
     const u = users[id];
@@ -180,7 +193,7 @@ client.on('messageCreate', async (message) => {
       `🎭 Masks: ${masks.length?masks.join(", "):"None"}`);
   }
 
-  // daily
+  // !daily
   if (message.content === '!daily'){
     if (!users[id]) return message.channel.send("You must !join first.");
     const now = Date.now();
@@ -192,12 +205,33 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`💰 You claimed **${DAILY_AMOUNT} Doubloons**!`);
   }
 
-  // drop doubloons
+  // !trade (replaces shop)
+  if (message.content === '!trade'){
+    const maskList = SHOP_ITEMS.masks.map(m=>`🎭 ${m.name} - ${m.price} Doubloons - Boost ×${m.boost}`).join('\n');
+    const propList = SHOP_ITEMS.props.map(p=>`🎭 ${p.name} (unlocks at ${p.rank})`).join('\n');
+    return message.channel.send(`🛍️ **Trade**\nMasks:\n${maskList}\nProps:\n${propList}`);
+  }
+
+  // !buy <mask>
+  if (message.content.startsWith('!buy ')){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const itemName = message.content.slice(5).trim();
+    const mask = SHOP_ITEMS.masks.find(m=>m.name.toLowerCase()===itemName.toLowerCase());
+    if (!mask) return message.channel.send("Mask not found.");
+    if (users[id].doubloons < mask.price) return message.channel.send("Not enough doubloons to buy this mask.");
+    users[id].doubloons -= mask.price;
+    users[id].items[mask.name] = true;
+    addActivity(users, `🎭 ${message.author.username} bought ${mask.name}`);
+    saveUsers(users);
+    return message.channel.send(`🎭 You bought **${mask.name}**!`);
+  }
+
+  // !drop
   if (message.content.startsWith('!drop')){
     if (!users[id]) return message.channel.send("You must !join first.");
     const args = message.content.split(' ');
-    const amount = parseInt(args[1]);
-    if (isNaN(amount) || amount <=0) return message.channel.send("Usage: !drop <amount>");
+    const amount = BigInt(args[1]);
+    if (isNaN(amount)) return message.channel.send("Usage: !drop <amount>");
     if (users[id].doubloons < amount) return message.channel.send("Not enough doubloons to drop.");
     users[id].doubloons -= amount;
     droppedDoubloons = { amount, messageId: message.id };
@@ -206,30 +240,33 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`💰 ${amount} Doubloons dropped! First to pick them gets it!`);
   }
 
+  // !pick
   if (message.content === '!pick'){
     if (!droppedDoubloons) return message.channel.send("No doubloons dropped to pick up.");
     users[id].doubloons += droppedDoubloons.amount;
     addActivity(users, `💰 ${message.author.username} picked up ${droppedDoubloons.amount} doubloons!`);
     const pickedAmount = droppedDoubloons.amount;
-    droppedDoubloons = null; // reset so no one else can pick
+    droppedDoubloons = null;
     saveUsers(users);
     return message.channel.send(`💰 You picked up **${pickedAmount} Doubloons**!`);
   }
 
   // privileged commands
   if (isPrivileged){
+    // !give
     if (message.content.startsWith('!give ')){
       const args = message.content.split(' ');
       const mention = message.mentions.users.first();
-      const amount = parseInt(args[2]);
+      const amount = BigInt(args[2]);
       if (!mention || isNaN(amount)) return message.channel.send("Usage: !give @user amount");
-      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0n, favor:0, items:{}, lastDaily:0 };
       users[mention.id].doubloons += amount;
       addActivity(users, `💰 ${message.author.username} gave ${amount} doubloons to ${mention.username}`);
       saveUsers(users);
       return message.channel.send(`💰 Gave ${amount} doubloons to ${mention.username}`);
     }
 
+    // !giveprop
     if (message.content.startsWith('!giveprop ')){
       const args = message.content.split(' ');
       const mention = message.mentions.users.first();
@@ -237,7 +274,7 @@ client.on('messageCreate', async (message) => {
       if (!mention || !propName) return message.channel.send("Usage: !giveprop @user PropName");
       const prop = SHOP_ITEMS.props.find(p=>p.name.toLowerCase()===propName.toLowerCase());
       if (!prop) return message.channel.send("Prop not found.");
-      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0n, favor:0, items:{}, lastDaily:0 };
       users[mention.id].items[prop.name] = true;
       addActivity(users, `🎭 ${message.author.username} gave ${prop.name} to ${mention.username}`);
       saveUsers(users);
@@ -254,7 +291,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ... other commands like !shop, !buy, !coinflip unchanged
+  // TODO: Add !tradeoffer and !tradeaccept for mask/boost trades
 });
 
 // --- login ---
