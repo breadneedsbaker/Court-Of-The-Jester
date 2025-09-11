@@ -21,7 +21,7 @@ const RANKS = [
   "Fool's Regent",
   "The Jester's Hand"
 ];
-const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999]; // Doubloons required per rank
+const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999];
 
 // --- UTILITIES ---
 function loadUsers() {
@@ -91,7 +91,6 @@ client.on('messageCreate', async (message) => {
     users[id].doubloons -= amount;
     users[mention.id].doubloons += amount;
 
-    // Update rank if needed
     users[mention.id].rank = getRank(users[mention.id].doubloons);
     users[id].rank = getRank(users[id].doubloons);
 
@@ -99,9 +98,9 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`${message.author.username} gifted 💰 **${amount} Doubloons** to ${mention.username}!`);
   }
 
-  // --- FAVOR (ONLY ME) ---
+  // --- FAVOR (ONLY OWNER) ---
   if (message.content.startsWith('!favor')) {
-    if (message.author.id !== process.env.1310082359693152338) return;
+    if (message.author.id !== process.env.OWNER_ID) return;
     const args = message.content.split(' ');
     if (args.length < 3) return message.channel.send("Usage: !favor @user durationInHours");
 
@@ -141,29 +140,3 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(() => console.log("✅ Login successful!"))
   .catch(err => console.error("❌ Failed to login:", err));
-
-  if (message.author.bot) return; // Ignore bot messages
-
-  if (message.content === '!ping') {
-    message.reply('Pong! 🃏');
-  }
-
-  if (message.content === '!jester') {
-    message.channel.send("🎭 The Jester has arrived!");
-  }
-
-  if (message.content === '!favor') {
-    message.channel.send("👑 You have been granted the Jester's Favor!");
-  }
-});
-
-// Login the bot
-if (!process.env.TOKEN) {
-  console.error("❌ Discord token is missing! Set TOKEN in environment variables.");
-  process.exit(1);
-}
-
-client.login(process.env.TOKEN)
-  .then(() => console.log("✅ Login successful!"))
-  .catch(err => console.error("❌ Failed to login:", err));
-
