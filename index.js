@@ -32,7 +32,7 @@ const RANK_EMOJI = {
   "The Jester's Hand": "✨"
 };
 const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999];
-const JESTER_ID = process.env.OWNER_ID; // <- hardcoded "eternal Jester"
+const JESTER_ID = process.env.OWNER_ID; // <- eternal Jester (you)
 
 // --- UTILITIES ---
 function loadUsers() {
@@ -277,6 +277,39 @@ client.on('messageCreate', async (message) => {
     saveUsers(users);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
     return message.channel.send(`😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
+  }
+
+  // --- CREATE ROLES (NEW COMMAND) ---
+  if (isPrivileged && message.content === '!createroles') {
+    for (const rank of RANKS) {
+      let role = message.guild.roles.cache.find(r => r.name === rank);
+      if (!role) {
+        await message.guild.roles.create({
+          name: rank,
+          color: 'PURPLE',
+          mentionable: true
+        });
+      }
+    }
+    // Ensure Jester role exists
+    let jesterRole = message.guild.roles.cache.find(r => r.name === "Jester");
+    if (!jesterRole) {
+      await message.guild.roles.create({
+        name: "Jester",
+        color: 'BLUE',
+        mentionable: true
+      });
+    }
+    // Ensure Ruler role exists
+    let rulerRole = message.guild.roles.cache.find(r => r.name === "Ruler");
+    if (!rulerRole) {
+      await message.guild.roles.create({
+        name: "Ruler",
+        color: 'GOLD',
+        mentionable: true
+      });
+    }
+    return message.channel.send("✅ All rank roles, Jester, and Ruler have been created (if missing)!");
   }
 });
 
