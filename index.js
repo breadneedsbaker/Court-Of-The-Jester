@@ -1,4 +1,4 @@
-require('dotenv').config(); // Load environment variables
+require('dotenv').config();
 const fs = require('fs');
 const { Client, GatewayIntentBits } = require('discord.js');
 
@@ -21,7 +21,7 @@ const RANKS = [
   "Fool's Regent",
   "The Jester's Hand"
 ];
-const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999];
+const RANK_THRESHOLDS = [0, 50, 150, 300, 500, 1000, 9999]; 
 
 // --- UTILITIES ---
 function loadUsers() {
@@ -38,6 +38,27 @@ function getRank(doubloons) {
     if (doubloons >= RANK_THRESHOLDS[i]) return RANKS[i];
   }
   return "Motley";
+}
+
+// --- ROLE MANAGEMENT ---
+async function assignRole(member, rank) {
+  try {
+    const guild = member.guild;
+    let role = guild.roles.cache.find(r => r.name === rank);
+    if (!role) {
+      role = await guild.roles.create({
+        name: rank,
+        color: 'PURPLE',
+        mentionable: true
+      });
+    }
+    // Remove old rank roles
+    const oldRanks = RANKS.filter(r => r !== rank).map(r => guild.roles.cache.find(role => role.name === r)).filter(Boolean);
+    await member.roles.remove(oldRanks).catch(() => {});
+    await member.roles.add(role);
+  } catch (err) {
+    console.error("Role assignment error:", err);
+  }
 }
 
 // --- BOT READY ---
@@ -57,6 +78,7 @@ client.on('messageCreate', async (message) => {
     if (!users[id]) {
       users[id] = { rank: "Motley", doubloons: 10, favor: false, favorExpires: null };
       saveUsers(users);
+      await assignRole(message.member, "Motley");
       return message.channel.send(`🎭 Welcome to the Jester's Court, ${message.author.username}! You are now a Motley. 🃏`);
     } else {
       return message.channel.send(`You are already in the Court, ${message.author.username}!`);
@@ -95,10 +117,13 @@ client.on('messageCreate', async (message) => {
     users[id].rank = getRank(users[id].doubloons);
 
     saveUsers(users);
+    await assignRole(message.member, users[id].rank);
+    await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
+
     return message.channel.send(`${message.author.username} gifted 💰 **${amount} Doubloons** to ${mention.username}!`);
   }
 
-  // --- FAVOR (ONLY OWNER) ---
+  // --- FAVOR (OWNER ONLY) ---
   if (message.content.startsWith('!favor')) {
     if (message.author.id !== process.env.OWNER_ID) return;
     const args = message.content.split(' ');
@@ -115,6 +140,21 @@ client.on('messageCreate', async (message) => {
 
     return message.channel.send(`👑 The Jester bestowed their Favor upon ${mention.username} for **${hours} hours**!`);
   }
+
+  // --- OWNER CREATIVE MODE ---
+  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!give')) {
+    // Usage: !give @user amount
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const amount = parseInt(args[2]);
+    if (!mention || isNaN(amount)) return message.channel.send("Usage: !give @user amount");
+    if (!users[mention.id]) users[mention.id] = { rank: "Motley", doubloons: 0, favor: false, favorExpires: null };
+    users[mention.id].doubloons += amount;
+    users[mention.id].rank = getRank(users[mention.id].doubloons);
+    saveUsers(users);
+    await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
+    return message.channel.send(`✨ Owner magic! Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
+  }
 });
 
 // --- FAVOR EXPIRATION CHECK ---
@@ -129,7 +169,7 @@ setInterval(() => {
     }
   }
   if (changed) saveUsers(users);
-}, 60000); // every minute
+}, 60000);
 
 // --- LOGIN ---
 if (!process.env.TOKEN || !process.env.OWNER_ID) {
