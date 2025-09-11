@@ -214,7 +214,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`🛍️ **Trade**\nMasks:\n${maskList}\nProps:\n${propList}`);
   }
 
-  // !buy
+  // !buy <mask>
   if (message.content.startsWith('!buy ')){
     if (!users[id]) return message.channel.send("You must !join first.");
     const itemName = message.content.slice(5).trim();
@@ -228,10 +228,154 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`🎭 You bought **${mask.name}**!`);
   }
 
-  // ... (drop, pick, tradeoffer, tradeaccept, trades, privileged commands, help remain identical)
+  // !drop <amount>
+  if (message.content.startsWith('!drop')){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const args = message.content.split(' ');
+    const amount = BigInt(args[1]);
+    if (isNaN(amount) || amount <= 0n) return message.channel.send("Usage: !drop <amount>");
+    if (users[id].doubloons < amount) return message.channel.send("Not enough doubloons to drop.");
+    users[id].doubloons -= amount;
+    droppedDoubloons = { amount, messageId: message.id };
+    addActivity(users, `💰 ${message.author.username} dropped ${amount} doubloons!`);
+    saveUsers(users);
+    return message.channel.send(`💰 ${amount} Doubloons dropped! First to pick them gets it!`);
+  }
+
+  // !pick
+  if (message.content === '!pick'){
+    if (!droppedDoubloons) return message.channel.send("No doubloons dropped to pick up.");
+    users[id].doubloons += droppedDoubloons.amount;
+    addActivity(users, `💰 ${message.author.username} picked up ${droppedDoubloons.amount} doubloons!`);
+    const pickedAmount = droppedDoubloons.amount;
+    droppedDoubloons = null;
+    saveUsers(users);
+    return message.channel.send(`💰 You picked up **${pickedAmount} Doubloons**!`);
+  }
+
+  // !tradeoffer @user <amount/items...>
+  if (message.content.startsWith('!tradeoffer ')){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const args = message.content.split(' ').slice(1);
+    const mention = message.mentions.users.first();
+    if (!mention) return message.channel.send("Usage: !tradeoffer @user <amount/items...>");
+    const recipientId = mention.id;
+    const offer = {doubloons:0n, items:[]};
+    const offerArgs = args.slice(1);
+    if (!offerArgs.length) return message.channel.send("Specify doubloons and/or items to trade.");
+    for (const arg of offerArgs){
+      const num = BigInt(arg);
+      if (!isNaN(num) && num > 0n){
+        if (users[id].doubloons < num) return message.channel.send("You don't have enough doubloons.");
+        offer.doubloons += num;
+      } else {
+        if (!users[id].items[arg]) return message.channel.send(`You don't own the item: ${arg}`);
+        offer.items.push(arg);
+      }
+    }
+    if (offer.doubloons === 0n && offer.items.length === 0) return message.channel.send("No valid items or doubloons to offer.");
+    pendingTrades[recipientId] = {from: id, offer};
+    return message.channel.send(`💌 Trade offer sent to ${mention.username}! They can use !tradeaccept to accept.`);
+  }
+
+  // !tradeaccept
+  if (message.content === '!tradeaccept'){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const trade = pendingTrades[id];
+    if (!trade) return message.channel.send("No pending trade offers for you.");
+    const senderId = trade.from;
+    const offer = trade.offer;
+    if (offer.doubloons > 0n && users[senderId].doubloons < offer.doubloons) return message.channel.send("Trade failed: sender no longer has enough doubloons.");
+    for (const item of offer.items){
+      if (!users[senderId].items[item]) return message.channel.send(`Trade failed: sender no longer owns ${item}`);
+    }
+    if (offer.doubloons > 0n){
+      users[senderId].doubloons -= offer.doubloons;
+      users[id].doubloons += offer.doubloons;
+    }
+    for (const item of offer.items){
+      delete users[senderId].items[item];
+      users[id].items[item] = true;
+    }
+    addActivity(users, `🔁 ${message.author.username} accepted a trade from ${client.users.cache.get(senderId)?.username || senderId}`);
+    delete pendingTrades[id];
+    saveUsers(users);
+    return message.channel.send("✅ Trade completed!");
+  }
+
+  // !trades
+  if (message.content === '!trades'){
+    const myTrades = pendingTrades[id];
+    if (!myTrades) return message.channel.send("No pending trade offers for you.");
+    const doubloons = myTrades.offer.doubloons || 0n;
+    const items = myTrades.offer.items.length ? myTrades.offer.items.join(", ") : "None";
+    const sender = client.users.cache.get(myTrades.from)?.username || myTrades.from;
+    return message.channel.send(`📦 Trade offer from ${sender}\nDoubloons: ${doubloons}\nItems: ${items}`);
+  }
+
+  // privileged commands
+  if (isPrivileged){
+    // !give @user amount
+    if (message.content.startsWith('!give ')){
+      const args = message.content.split(' ');
+      const mention = message.mentions.users.first();
+      const amount = BigInt(args[2]);
+      if (!mention || isNaN(amount) || amount <= 0n) return message.channel.send("Usage: !give @user amount");
+      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0n, favor:0, items:{}, lastDaily:0 };
+      users[mention.id].doubloons += amount;
+      addActivity(users, `💰 ${message.author.username} gave ${amount} doubloons to ${mention.username}`);
+      saveUsers(users);
+      return message.channel.send(`💰 Gave ${amount} doubloons to ${mention.username}`);
+    }
+
+    // !giveprop @user PropName
+    if (message.content.startsWith('!giveprop ')){
+      const args = message.content.split(' ');
+      const mention = message.mentions.users.first();
+      const propName = args.slice(2).join(' ');
+      if (!mention || !propName) return message.channel.send("Usage: !giveprop @user PropName");
+      const prop = SHOP_ITEMS.props.find(p=>p.name.toLowerCase()===propName.toLowerCase());
+      if (!prop) return message.channel.send("Prop not found.");
+      if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0n, favor:0, items:{}, lastDaily:0 };
+      users[mention.id].items[prop.name] = true;
+      addActivity(users, `🎭 ${message.author.username} gave ${prop.name} to ${mention.username}`);
+      saveUsers(users);
+      return message.channel.send(`🎭 Gave ${prop.name} to ${mention.username}!`);
+    }
+
+    // !kick @user
+    if (message.content.startsWith('!kick')){
+      const mention = message.mentions.members.first();
+      if (!mention) return message.channel.send("Usage: !kick @user");
+      mention.kick("Kicked from Court by privileged user").catch(()=>{});
+      addActivity(users, `🚪 ${mention.user.username} was kicked from the Court by ${message.author.username}`);
+      return message.channel.send(`🚪 Kicked ${mention.user.username} from the Court.`);
+    }
+  }
+
+  // !help
+  if (message.content === '!help'){
+    return message.channel.send(`🤡 **JesterBot Commands**:
+!join — join the Court
+!profile — view your profile
+!daily — claim daily doubloons
+!trade — view masks, props
+!buy <item> — buy an item
+!drop <amount> — drop doubloons for others to pick
+!pick — pick up dropped doubloons
+!tradeoffer @user <doubloons/items...> — offer doubloons/items
+!tradeaccept — accept a pending trade offer
+!trades — view your pending trade offers
+
+Privileged only:
+!give @user <amount> — give doubloons
+!giveprop @user <PropName> — give prop
+!kick @user — kick from Court
+`);
+  }
 });
 
 // --- login ---
-client.once('ready', () => console.log(`🤡 JesterBot online as ${client.user.tag}`));
+client.once('ready',()=>console.log(`🤡 JesterBot online as ${client.user.tag}`));
 if (!process.env.TOKEN || !process.env.OWNER_ID) process.exit(1);
 client.login(process.env.TOKEN);
