@@ -1,14 +1,17 @@
-// index.js — hierarchy-fixed
+// index.js — full jester system
 require('dotenv').config();
 const fs = require('fs');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildMembers,
   ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
 // --- quick env check ---
@@ -17,6 +20,7 @@ console.log('ENV CHECK -> TOKEN set?', !!process.env.TOKEN, 'OWNER_ID set?', !!p
 const USER_FILE = './users.json';
 const MAX_ACTIVITY = 50;
 
+// --- Ranks & Colors ---
 const RANKS = [
   "Motley","Trickster","Prankmaster","Harlequin",
   "Jester Knight","Fool's Regent","The Jester's Hand"
@@ -41,7 +45,7 @@ const RANK_EMOJI = {
   "Court Jester (Founder)":"🃏"
 };
 
-const RANK_THRESHOLDS = [0,50,150,300,500,1000,9999];
+const EXP_THRESHOLDS = [0,200,600,1200,2000,4000,7000];
 const JESTER_ID = process.env.OWNER_ID;
 
 // --- storage helpers ---
@@ -60,10 +64,10 @@ function saveUsers(users){
 }
 
 // --- rank helpers ---
-function getRank(doubloons, id){
+function getRank(exp, id){
   if (id === JESTER_ID) return "Court Jester (Founder)";
   for (let i = RANKS.length-1; i>=0; i--){
-    if ((doubloons||0) >= RANK_THRESHOLDS[i]) return RANKS[i];
+    if ((exp||0) >= EXP_THRESHOLDS[i]) return RANKS[i];
   }
   return "Motley";
 }
@@ -89,7 +93,6 @@ async function getGuildMember(guild, userId){
 
 // --- role setup (hierarchy aware) ---
 async function setupRoles(guild){
-  // Order: Ruler → Jester → Elites → Normals (reverse hierarchy)
   const needed = ["Ruler","Jester",...ELITE_RANKS.reverse(),...RANKS.reverse()];
   let results = [];
   for (let name of needed){
@@ -100,10 +103,8 @@ async function setupRoles(guild){
           color: RANK_COLORS[name] || "#99aab5",
           mentionable: true
         });
-        console.log(`[setupRoles] created '${name}' in ${guild.name}`);
         results.push(`✅ Created **${name}**`);
       } catch (err){
-        console.error(`[setupRoles] failed to create '${name}' in ${guild.name}:`, err?.message || err);
         results.push(`❌ Failed to create **${name}** (${err?.message || err})`);
       }
     } else {
@@ -117,14 +118,11 @@ async function setupRoles(guild){
 async function assignRole(member, rank){
   if (!member) return;
   try{
-    // Jester special
     if (member.id === JESTER_ID){
       const jr = member.guild.roles.cache.find(r => r.name === 'Jester');
       if (jr) await member.roles.add(jr).catch(()=>{});
       return;
     }
-
-    // Normal
     let role = member.guild.roles.cache.find(r => r.name === rank);
     if (!role){
       role = await member.guild.roles.create({
@@ -133,7 +131,6 @@ async function assignRole(member, rank){
         mentionable: true
       });
     }
-
     const oldRoles = RANKS.filter(r => r !== rank)
       .map(r => member.guild.roles.cache.find(rr => rr.name === r))
       .filter(Boolean);
@@ -143,7 +140,6 @@ async function assignRole(member, rank){
     console.error('[assignRole] error:', err?.message || err);
   }
 }
-
 async function assignRulerRole(member){
   if (!member) return;
   try{
@@ -161,29 +157,110 @@ async function assignRulerRole(member){
 // --- ready ---
 client.once('ready', async () => {
   console.log(`🤡 JesterBot online as ${client.user.tag}`);
-  const users = loadUsers();
-
   for (const [gid, guild] of client.guilds.cache){
-    try {
-      const results = await setupRoles(guild);
-      console.log(`[ready] setupRoles for ${guild.name}:`, results.join('; '));
-    } catch(e){
-      console.error('[ready] setupRoles failed for', guild.name, e?.message || e);
-    }
+    await setupRoles(guild);
   }
 });
-
-// --- guild join ---
 client.on('guildCreate', async (guild) => {
-  console.log(`🏰 Joined guild: ${guild.name} (${guild.id})`);
   const results = await setupRoles(guild);
   console.log(`[guildCreate] setupRoles for ${guild.name}:`, results.join('; '));
 });
 
-// --- message commands (unchanged from last version except role setup uses new colors/hierarchy) ---
-// [KEEP all your existing !join, !gift, !favor, !give, !ruler, !leaderboard, !activity, !prank, !createroles code here unchanged]
+// --- reaction -> EXP ---
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+  if (reaction.message.partial) await reaction.message.fetch();
+  if (user.bot) return;
+  if (reaction.emoji.name !== '🃏') return;
 
-/* (Trimmed for clarity — your previous command handling block goes here) */
+  const users = loadUsers();
+  const targetId = reaction.message.author.id;
+  if (!users[targetId]) {
+    users[targetId] = { exp:0, doubloons:0, favor:false, favorExpires:null, items:{} };
+  }
+  users[targetId].exp = (users[targetId].exp||0) + 20;
+
+  const newRank = getRank(users[targetId].exp, targetId);
+  users[targetId].rank = newRank;
+  addActivity(users, `🃏 ${user.username} gave a card to ${reaction.message.author.username} (+20 EXP)`);
+
+  saveUsers(users);
+  const member = await getGuildMember(reaction.message.guild, targetId);
+  if (member) await assignRole(member, newRank);
+});
+
+// --- commands ---
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  const users = loadUsers();
+  const id = message.author.id;
+  const isPrivileged = id === JESTER_ID || message.member.roles.cache.some(r => r.name === 'Ruler');
+
+  if (message.content === '!join'){
+    if (!users[id]){
+      users[id] = { rank:"Motley", exp:0, doubloons:10, favor:false, favorExpires:null, items:{} };
+      addActivity(users, `🎭 ${message.author.username} joined the Court!`);
+      saveUsers(users);
+      await assignRole(message.member, "Motley");
+      return message.channel.send(`🎭 Welcome ${message.author.username}! You are now a Motley 😜`);
+    } else return message.channel.send("You are already in the Court!");
+  }
+
+  if (message.content === '!rank'){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const rank = users[id].rank;
+    return message.channel.send(`Your rank: ${RANK_EMOJI[rank]||""} **${rank}** (${users[id].exp||0} EXP)`);
+  }
+
+  if (message.content === '!doubloons'){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    return message.channel.send(`You have 💰 **${users[id].doubloons||0} Doubloons**`);
+  }
+
+  if (message.content === '!leaderboard'){
+    const leaderboard = Object.entries(users)
+      .filter(([k,v])=>k!=='activity')
+      .sort((a,b)=>(b[1].exp||0)-(a[1].exp||0))
+      .slice(0,10)
+      .map(([k,v],i)=>`${i+1}. ${RANK_EMOJI[v.rank]||""} ${v.rank} <@${k}> — EXP ${v.exp||0}, 💰 ${v.doubloons||0}`);
+    if (!leaderboard.length) return message.channel.send("No users yet!");
+    return message.channel.send("🏆 **Leaderboard**\n"+leaderboard.join('\n'));
+  }
+
+  if (message.content === '!activity'){
+    const act = users.activity||[];
+    if (!act.length) return message.channel.send("No activity yet.");
+    return message.channel.send("📜 **Recent Court Activity**\n"+act.slice(0,10).join('\n'));
+  }
+
+  if (isPrivileged && message.content.startsWith('!give')){
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const amount = parseInt(args[2]);
+    if (!mention||isNaN(amount)) return message.channel.send("Usage: !give @user amount");
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:false, favorExpires:null, items:{} };
+    users[mention.id].doubloons += amount;
+    users[mention.id].rank = getRank(users[mention.id].exp, mention.id);
+    addActivity(users, `✨ ${message.author.username} gave ${amount} Doubloons to ${mention.username}`);
+    saveUsers(users);
+    await assignRole(await getGuildMember(message.guild, mention.id), users[mention.id].rank);
+    return message.channel.send(`✨ Gave 💰 **${amount}** to ${mention.username}`);
+  }
+
+  if (id===JESTER_ID && message.content.startsWith('!ruler')){
+    const mention = message.mentions.members.first();
+    if (!mention) return message.channel.send("Usage: !ruler @user");
+    await assignRulerRole(mention);
+    addActivity(users, `👑 ${mention.user.username} is now Ruler`);
+    saveUsers(users);
+    return message.channel.send(`👑 ${mention.user.username} is now Ruler!`);
+  }
+
+  if (message.content==='!createroles'){
+    const results = await setupRoles(message.guild);
+    return message.channel.send("📜 Role Creation Report\n"+results.join('\n'));
+  }
+});
 
 // --- login ---
 if (!process.env.TOKEN || !process.env.OWNER_ID) {
@@ -191,5 +268,6 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
   process.exit(1);
 }
 client.login(process.env.TOKEN)
-  .then(() => console.log('✅ Login successful!'))
-  .catch(err => console.error('❌ Login failed:', err));
+  .then(()=>console.log('✅ Login successful!'))
+  .catch(err=>console.error('❌ Login failed:', err));
+
