@@ -135,7 +135,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
   const users = loadUsers();
   const targetId = reaction.message.author.id;
-  if (!users[targetId]) users[targetId] = {exp:0,doubloons:0,items:{},lastDaily:0};
+  if (!users[targetId]) users[targetId] = {exp:0,doubloons:0,favor:0,items:{},lastDaily:0};
 
   users[targetId].exp += 20;
   users[targetId].rank = getRank(users[targetId].exp, targetId);
@@ -151,12 +151,12 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const users = loadUsers();
   const id = message.author.id;
-  const isPrivileged = id === JESTER_ID || message.member.roles.cache.some(r => r.name === 'Ruler');
+  const isPrivileged = id === JESTER_ID || message.member.roles.cache.some(r => ["Ruler","The Jester's Hand"].includes(r.name));
 
   // join
   if (message.content === '!join'){
     if (!users[id]){
-      users[id] = { rank:"Motley", exp:0, doubloons:10, items:{}, lastDaily:0 };
+      users[id] = { rank:"Motley", exp:0, doubloons:10, favor:0, items:{}, lastDaily:0 };
       addActivity(users, `🎭 ${message.author.username} joined the Court!`);
       saveUsers(users);
       await assignRole(message.member, "Motley");
@@ -173,6 +173,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`📜 **Profile of ${message.author.username}**\n`+
       `${RANK_EMOJI[u.rank]||""} Rank: **${u.rank}** (${u.exp} EXP)\n`+
       `💰 Doubloons: **${u.doubloons}**\n`+
+      `⭐ Favor: **${u.favor||0}**\n`+
       `🎭 Props: ${props.length?props.join(", "):"None"}\n`+
       `🎭 Masks: ${masks.length?masks.join(", "):"None"}`);
   }
@@ -230,13 +231,68 @@ client.on('messageCreate', async (message) => {
     const mention = message.mentions.users.first();
     const amount = parseInt(args[2]);
     if (!mention||isNaN(amount)) return message.channel.send("Usage: !give @user amount");
-    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, items:{}, lastDaily:0 };
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
     users[mention.id].doubloons += amount;
     users[mention.id].rank = getRank(users[mention.id].exp, mention.id);
     addActivity(users, `✨ ${message.author.username} gave ${amount} Doubloons to ${mention.username}`);
     saveUsers(users);
     await assignRole(await getGuildMember(message.guild, mention.id), users[mention.id].rank);
     return message.channel.send(`✨ Gave 💰 **${amount}** to ${mention.username}`);
+  }
+
+  // give exp
+  if (isPrivileged && message.content.startsWith('!giveexp')){
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const amount = parseInt(args[2]);
+    if (!mention||isNaN(amount)) return message.channel.send("Usage: !giveexp @user amount");
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+    users[mention.id].exp += amount;
+    users[mention.id].rank = getRank(users[mention.id].exp, mention.id);
+    addActivity(users, `📈 ${message.author.username} gave ${amount} EXP to ${mention.username}`);
+    saveUsers(users);
+    await assignRole(await getGuildMember(message.guild, mention.id), users[mention.id].rank);
+    return message.channel.send(`📈 Gave **${amount} EXP** to ${mention.username}`);
+  }
+
+  // give rank
+  if (isPrivileged && message.content.startsWith('!giverank')){
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const rank = args.slice(2).join(' ');
+    if (!mention||!rank) return message.channel.send("Usage: !giverank @user <rank>");
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+    users[mention.id].rank = rank;
+    addActivity(users, `🏅 ${message.author.username} set ${mention.username}'s rank to ${rank}`);
+    saveUsers(users);
+    await assignRole(await getGuildMember(message.guild, mention.id), rank);
+    return message.channel.send(`🏅 Set ${mention.username}'s rank to ${rank}`);
+  }
+
+  // give prop
+  if (isPrivileged && message.content.startsWith('!giveprop')){
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const prop = args.slice(2).join(' ');
+    if (!mention||!prop) return message.channel.send("Usage: !giveprop @user <prop>");
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+    users[mention.id].items[prop] = true;
+    addActivity(users, `🎁 ${message.author.username} gave prop ${prop} to ${mention.username}`);
+    saveUsers(users);
+    return message.channel.send(`🎁 Gave prop **${prop}** to ${mention.username}`);
+  }
+
+  // give favor
+  if (isPrivileged && message.content.startsWith('!favor')){
+    const args = message.content.split(' ');
+    const mention = message.mentions.users.first();
+    const amount = parseInt(args[2]);
+    if (!mention||isNaN(amount)) return message.channel.send("Usage: !favor @user amount");
+    if (!users[mention.id]) users[mention.id] = { rank:"Motley", exp:0, doubloons:0, favor:0, items:{}, lastDaily:0 };
+    users[mention.id].favor = (users[mention.id].favor||0)+amount;
+    addActivity(users, `⭐ ${message.author.username} granted ${amount} Favor to ${mention.username}`);
+    saveUsers(users);
+    return message.channel.send(`⭐ Granted **${amount} Favor** to ${mention.username}`);
   }
 
   // ruler
