@@ -18,6 +18,7 @@ const USER_FILE = './users.json';
 const MAX_ACTIVITY = 50;
 const DAILY_AMOUNT = 20n; // use BigInt for very large numbers
 let droppedDoubloons = null; // { amount: BigInt, messageId }
+let pendingTrades = {}; // { recipientId: { from: senderId, offer: {doubloons:BigInt, items:[string] } } }
 
 const RANKS = [
   "Motley","Trickster","Prankmaster","Harlequin",
@@ -65,7 +66,6 @@ function loadUsers(){
   if (!fs.existsSync(USER_FILE)) fs.writeFileSync(USER_FILE,'{}');
   try { 
     const data = JSON.parse(fs.readFileSync(USER_FILE));
-    // convert doubloons to BigInt if needed
     for (const uid in data) {
       if (data[uid].doubloons !== undefined) data[uid].doubloons = BigInt(data[uid].doubloons);
     }
@@ -134,7 +134,7 @@ async function assignRole(member, rank){
 
 async function assignRulerRole(member){
   let role = member.guild.roles.cache.find(r => r.name === 'Ruler');
-  if (!role) role = await member.roles.create({ name:'Ruler', color:RANK_COLORS["Ruler"], mentionable:true });
+  if (!role) role = await guild.roles.create({ name:'Ruler', color:RANK_COLORS["Ruler"], mentionable:true });
   member.guild.members.cache.forEach(m => {
     if (m.roles.cache.has(role.id) && m.id !== member.id) m.roles.remove(role).catch(()=>{});
   });
@@ -251,9 +251,72 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`💰 You picked up **${pickedAmount} Doubloons**!`);
   }
 
+  // --- trade system ---
+  if (message.content.startsWith('!tradeoffer ')){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const args = message.content.split(' ').slice(1);
+    const mention = message.mentions.users.first();
+    if (!mention) return message.channel.send("Usage: !tradeoffer @user <amount/items...>");
+    const recipientId = mention.id;
+
+    const offer = {doubloons:0n, items:[]};
+    const offerArgs = args.slice(1);
+    if (!offerArgs.length) return message.channel.send("Specify doubloons and/or items to trade.");
+
+    for (const arg of offerArgs){
+      const num = BigInt(arg);
+      if (!isNaN(num) && num > 0n){
+        if (users[id].doubloons < num) return message.channel.send("You don't have enough doubloons.");
+        offer.doubloons += num;
+      } else {
+        if (!users[id].items[arg]) return message.channel.send(`You don't own the item: ${arg}`);
+        offer.items.push(arg);
+      }
+    }
+    if (offer.doubloons === 0n && offer.items.length === 0) return message.channel.send("No valid items or doubloons to offer.");
+    pendingTrades[recipientId] = {from: id, offer};
+    return message.channel.send(`💌 Trade offer sent to ${mention.username}! They can use \`!tradeaccept\` to accept.`);
+  }
+
+  if (message.content === '!tradeaccept'){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const trade = pendingTrades[id];
+    if (!trade) return message.channel.send("No pending trade offers for you.");
+    const senderId = trade.from;
+    const offer = trade.offer;
+
+    if (offer.doubloons > 0n && users[senderId].doubloons < offer.doubloons)
+      return message.channel.send("Trade failed: sender no longer has enough doubloons.");
+    for (const item of offer.items){
+      if (!users[senderId].items[item]) return message.channel.send(`Trade failed: sender no longer owns ${item}`);
+    }
+
+    if (offer.doubloons > 0n){
+      users[senderId].doubloons -= offer.doubloons;
+      users[id].doubloons += offer.doubloons;
+    }
+    for (const item of offer.items){
+      delete users[senderId].items[item];
+      users[id].items[item] = true;
+    }
+
+    addActivity(users, `🔁 ${message.author.username} accepted a trade from ${client.users.cache.get(senderId)?.username || senderId}`);
+    delete pendingTrades[id];
+    saveUsers(users);
+    return message.channel.send(`✅ Trade completed!`);
+  }
+
+  if (message.content === '!trades'){
+    const myTrades = pendingTrades[id];
+    if (!myTrades) return message.channel.send("No pending trade offers for you.");
+    const doubloons = myTrades.offer.doubloons || 0n;
+    const items = myTrades.offer.items.length ? myTrades.offer.items.join(", ") : "None";
+    const sender = client.users.cache.get(myTrades.from)?.username || myTrades.from;
+    return message.channel.send(`📦 Trade offer from ${sender}\nDoubloons: ${doubloons}\nItems: ${items}`);
+  }
+
   // privileged commands
   if (isPrivileged){
-    // !give
     if (message.content.startsWith('!give ')){
       const args = message.content.split(' ');
       const mention = message.mentions.users.first();
@@ -265,8 +328,6 @@ client.on('messageCreate', async (message) => {
       saveUsers(users);
       return message.channel.send(`💰 Gave ${amount} doubloons to ${mention.username}`);
     }
-
-    // !giveprop
     if (message.content.startsWith('!giveprop ')){
       const args = message.content.split(' ');
       const mention = message.mentions.users.first();
@@ -280,8 +341,6 @@ client.on('messageCreate', async (message) => {
       saveUsers(users);
       return message.channel.send(`🎭 Gave ${prop.name} to ${mention.username}!`);
     }
-
-    // !kick
     if (message.content.startsWith('!kick')){
       const mention = message.mentions.members.first();
       if (!mention) return message.channel.send("Usage: !kick @user");
@@ -291,7 +350,25 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // TODO: Add !tradeoffer and !tradeaccept for mask/boost trades
+  // !help
+  if (message.content === '!help'){
+    return message.channel.send(`🤡 **JesterBot Commands**:
+!join — join the Court
+!profile — view your profile
+!daily — claim daily doubloons
+!trade — view masks, props
+!buy <item> — buy an item
+!drop <amount> — drop doubloons for others to pick
+!pick — pick up dropped doubloons
+!tradeoffer @user <doubloons/items...> — offer any amount of doubloons and/or items to another player
+!tradeaccept — accept a pending trade offer
+!trades — view your pending trade offers
+Privileged only:
+!give @user <amount> — give doubloons
+!giveprop @user <PropName> — give prop
+!kick @user — kick from Court
+`);
+  }
 });
 
 // --- login ---
