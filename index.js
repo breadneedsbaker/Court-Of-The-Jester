@@ -124,6 +124,30 @@ client.once('ready', () => {
   console.log(`🤡 JesterBot is online as ${client.user.tag}`);
 });
 
+client.once('ready', async () => {
+  console.log(`🤡 JesterBot is online as ${client.user.tag}`);
+
+  for (const [guildId, guild] of client.guilds.cache) {
+    console.log(`🔎 Checking roles for guild: ${guild.name}`);
+
+    for (let rank of RANKS) {
+      let role = guild.roles.cache.find(r => r.name === rank);
+      if (!role) {
+        try {
+          await guild.roles.create({
+            name: rank,
+            color: 'PURPLE',
+            mentionable: true,
+          });
+          console.log(`✅ Created role: ${rank} in ${guild.name}`);
+        } catch (err) {
+          console.error(`❌ Failed to create role ${rank} in ${guild.name}:`, err);
+        }
+      }
+    }
+  }
+});
+
 // --- COMMANDS ---
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
@@ -331,3 +355,4 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(() => console.log("✅ Login successful!"))
   .catch(err => console.error("❌ Failed to login:", err));
+
