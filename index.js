@@ -22,9 +22,9 @@ const RANKS = [
 ];
 const ELITE_RANKS = ["Fool's Regent","The Jester's Hand"]; // do not auto-sync across servers
 const RANK_EMOJI = {
-  "Motley":"🃏","Trickster":"🎩","Prankmaster":"🤡","Harlequin":"🎭",
-  "Jester Knight":"👑","Fool's Regent":"🏰","The Jester's Hand":"✨",
-  "Court Jester (Founder)":"🤡"
+  "Motley":"😜","Trickster":"🎩","Prankmaster":"🤡","Harlequin":"🎭",
+  "Jester Knight":"✨","Fool's Regent":"✨","The Jester's Hand":"✨",
+  "Court Jester (Founder)":"🃏"
 };
 const RANK_THRESHOLDS = [0,50,150,300,500,1000,9999];
 const JESTER_ID = process.env.OWNER_ID; // your Discord user id string
@@ -398,3 +398,4 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(() => console.log('✅ Login successful!'))
   .catch(err => console.error('❌ Login failed:', err));
+
