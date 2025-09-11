@@ -12,7 +12,7 @@ const client = new Client({
 
 // --- CONFIG ---
 const USER_FILE = './users.json';
-const MAX_ACTIVITY = 50; // Keep last 50 events
+const MAX_ACTIVITY = 50;
 const RANKS = [
   "Motley",
   "Trickster",
@@ -58,6 +58,7 @@ function addActivity(users, text) {
 
 // --- ROLE MANAGEMENT ---
 async function assignRole(member, rank) {
+  if (!member) return;
   try {
     const guild = member.guild;
     let role = guild.roles.cache.find(r => r.name === rank);
@@ -75,6 +76,28 @@ async function assignRole(member, rank) {
     await member.roles.add(role);
   } catch (err) {
     console.error("Role assignment error:", err);
+  }
+}
+
+async function assignRulerRole(member) {
+  if (!member) return;
+  try {
+    const guild = member.guild;
+    let role = guild.roles.cache.find(r => r.name === 'Ruler');
+    if (!role) {
+      role = await guild.roles.create({
+        name: 'Ruler',
+        color: 'GOLD',
+        mentionable: true
+      });
+    }
+    // Remove old Ruler from guild
+    guild.members.cache.forEach(m => {
+      if (m.roles.cache.has(role.id) && m.id !== member.id) m.roles.remove(role).catch(() => {});
+    });
+    await member.roles.add(role);
+  } catch (err) {
+    console.error("Ruler role assignment error:", err);
   }
 }
 
@@ -132,10 +155,8 @@ client.on('messageCreate', async (message) => {
 
     users[id].doubloons -= amount;
     users[mention.id].doubloons += amount;
-
     users[mention.id].rank = getRank(users[mention.id].doubloons);
     users[id].rank = getRank(users[id].doubloons);
-
     addActivity(users, `💰 ${message.author.username} gifted ${amount} Doubloons to ${mention.username}!`);
 
     saveUsers(users);
@@ -145,9 +166,11 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`${message.author.username} gifted 💰 **${amount} Doubloons** to ${mention.username}!`);
   }
 
-  // --- FAVOR (OWNER ONLY) ---
+  // --- FAVOR ---
   if (message.content.startsWith('!favor')) {
-    if (message.author.id !== process.env.OWNER_ID) return;
+    const canGiveFavor = message.author.id === process.env.OWNER_ID ||
+      (message.guild.members.cache.get(message.author.id)?.roles.cache.some(r => r.name === 'Ruler'));
+    if (!canGiveFavor) return;
     const args = message.content.split(' ');
     if (args.length < 3) return message.channel.send("Usage: !favor @user durationInHours");
 
@@ -158,14 +181,17 @@ client.on('messageCreate', async (message) => {
 
     users[mention.id].favor = true;
     users[mention.id].favorExpires = Date.now() + hours * 3600000;
-    addActivity(users, `👑 The Jester bestowed Favor upon ${mention.username} for ${hours} hours!`);
+    addActivity(users, `👑 Favor given to ${mention.username} for ${hours} hours!`);
 
     saveUsers(users);
-    return message.channel.send(`👑 The Jester bestowed their Favor upon ${mention.username} for **${hours} hours**!`);
+    return message.channel.send(`👑 Favor bestowed upon ${mention.username} for **${hours} hours**!`);
   }
 
-  // --- OWNER CREATIVE MODE ---
-  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!give')) {
+  // --- OWNER / RULER CREATIVE MODE ---
+  const isPrivileged = message.author.id === process.env.OWNER_ID ||
+    (message.guild.members.cache.get(message.author.id)?.roles.cache.some(r => r.name === 'Ruler'));
+
+  if (isPrivileged && message.content.startsWith('!give')) {
     const args = message.content.split(' ');
     const mention = message.mentions.users.first();
     const amount = parseInt(args[2]);
@@ -174,12 +200,21 @@ client.on('messageCreate', async (message) => {
 
     users[mention.id].doubloons += amount;
     users[mention.id].rank = getRank(users[mention.id].doubloons);
-    addActivity(users, `✨ Owner magic! Gave ${amount} Doubloons to ${mention.username}!`);
+    addActivity(users, `✨ ${message.author.username} gave ${amount} Doubloons to ${mention.username}!`);
 
     saveUsers(users);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
+    return message.channel.send(`✨ Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
+  }
 
-    return message.channel.send(`✨ Owner magic! Gave 💰 **${amount} Doubloons** to ${mention.username}!`);
+  // --- RULER ASSIGNMENT (OWNER ONLY) ---
+  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!ruler')) {
+    const mention = message.mentions.members.first();
+    if (!mention) return message.channel.send("Usage: !ruler @user");
+    await assignRulerRole(mention);
+    addActivity(users, `👑 ${mention.user.username} was given the Ruler title!`);
+    saveUsers(users);
+    return message.channel.send(`👑 ${mention.user.username} is now the Ruler of this server!`);
   }
 
   // --- LEADERBOARD ---
@@ -200,8 +235,8 @@ client.on('messageCreate', async (message) => {
     return message.channel.send("📜 **Recent Court Activity**\n" + act.slice(0, 10).join('\n'));
   }
 
-  // --- PRANK EVENT (OWNER ONLY) ---
-  if (message.author.id === process.env.OWNER_ID && message.content.startsWith('!prank')) {
+  // --- PRANK EVENT ---
+  if (isPrivileged && message.content.startsWith('!prank')) {
     const args = message.content.split(' ');
     const mention = message.mentions.users.first();
     const amount = parseInt(args[2]) || 10;
@@ -214,7 +249,6 @@ client.on('messageCreate', async (message) => {
 
     saveUsers(users);
     await assignRole(message.guild.members.cache.get(mention.id), users[mention.id].rank);
-
     return message.channel.send(`😈 ${mention.username} got pranked and lost ${amount} Doubloons!`);
   }
 });
@@ -243,3 +277,4 @@ if (!process.env.TOKEN || !process.env.OWNER_ID) {
 client.login(process.env.TOKEN)
   .then(() => console.log("✅ Login successful!"))
   .catch(err => console.error("❌ Failed to login:", err));
+
