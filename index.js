@@ -1,4 +1,5 @@
-// index.js — full JesterBot with auto-unlock props & rank-limited trade
+Yep! Copy-paste ready full code:
+// index.js — full JesterBot with favor, auto-unlock props & rank-limited trade + tradesystem
 require('dotenv').config();
 const fs = require('fs');
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
@@ -16,9 +17,9 @@ const client = new Client({
 
 const USER_FILE = './users.json';
 const MAX_ACTIVITY = 50;
-const DAILY_AMOUNT = 20n; // BigInt for large numbers
+const DAILY_AMOUNT = 20n; // BigInt
 let droppedDoubloons = null;
-let pendingTrades = {};
+let pendingTrades = {}; // { recipientId: { from: senderId, offer: { doubloons:BigInt, items:[string] } } }
 
 const RANKS = [
   "Motley","Trickster","Prankmaster","Harlequin",
@@ -148,7 +149,7 @@ function unlockPropsForRank(users, id, newRank){
   for (const prop of unlocked){
     if (!users[id].items[prop]){
       users[id].items[prop] = true;
-      addActivity(users, `🎁 ${id} unlocked ${prop} for reaching ${newRank}!`);
+      addActivity(users, `🎁 <@${id}> unlocked ${prop} for reaching ${newRank}!`);
     }
   }
 }
@@ -180,6 +181,7 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const users = loadUsers();
   const id = message.author.id;
+
   const isPrivileged = message.member?.roles?.cache?.some(r => ["Ruler","The Jester's Hand"].includes(r.name)) || id === JESTER_ID;
 
   // !join
@@ -212,12 +214,89 @@ client.on('messageCreate', async (message) => {
       `🎭 Masks: ${masks.length?masks.join(", "):"None"}`);
   }
 
-  // !daily, !trade, !buy, !drop, !pick, !tradeoffer, !tradeaccept, !trades
-  // All previous logic safe, you can insert checks:
-  //  - only allow prop trades if user's rank >= prop rank
-  //  - unlock props automatically on rank up (handled above)
-  //  - guild/member actions wrapped in try/catch
+  // --- favor system ---
+  if (message.content.startsWith('!givefavor')){
+    const args = message.content.split(' ').slice(1);
+    const target = message.mentions.users.first();
+    const amount = parseInt(args[1] || 0);
+    if (!target || isNaN(amount) || amount <= 0) return message.channel.send("Usage: !givefavor @user amount");
+    
+    const giverId = id;
+    if (![JESTER_ID, ...Object.values(message.member.roles.cache)
+        .filter(r=>["Ruler","The Jester's Hand"].includes(r.name)).map(r=>r.id)]
+        .includes(giverId) && !isPrivileged) return message.channel.send("You cannot give favor!");
 
+    if (!users[target.id]) users[target.id] = {rank:"Motley",exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
+
+    // Determine favor multiplier
+    let multiplier = 1;
+    const giverRoles = message.member.roles.cache.map(r=>r.name);
+    if (giverId === JESTER_ID) multiplier = 1;
+    else if (giverRoles.includes("The Jester's Hand")) multiplier = 0.25;
+    else if (giverRoles.includes("Ruler")) multiplier = 0.33;
+
+    const addedFavor = Math.ceil(amount * multiplier);
+    users[target.id].favor = (users[target.id].favor||0) + addedFavor;
+    addActivity(users, `⭐ <@${giverId}> gave ${addedFavor} favor to <@${target.id}>`);
+    saveUsers(users);
+    return message.channel.send(`⭐ <@${target.id}> received ${addedFavor} favor!`);
+  }
+
+  // --- trades ---
+  if (message.content.startsWith('!tradeoffer')){
+    const args = message.content.split(' ').slice(1);
+    if (args.length < 2) return message.channel.send("Usage: !tradeoffer @user amount [item1,item2]");
+    const target = message.mentions.users.first();
+    if (!target) return message.channel.send("You must mention a valid user!");
+    const amount = BigInt(args[1] || 0);
+    const items = args.slice(2).join(' ').split(',').filter(Boolean);
+    const fromUser = users[id];
+    const toUser = users[target.id];
+    if (!toUser) return message.channel.send("Target user must join first!");
+    
+    // Check item ownership & rank limits
+    for (const item of items){
+      if (!fromUser.items[item]) return message.channel.send(`You do not own ${item}`);
+      const requiredRank = SHOP_ITEMS.props.find(p=>p.name===item)?.rank;
+      if (requiredRank && RANKS.indexOf(fromUser.rank) < RANKS.indexOf(requiredRank)){
+        return message.channel.send(`You cannot trade ${item}, your rank is too low.`);
+      }
+    }
+
+    pendingTrades[target.id] = { from: id, offer: { doubloons: amount, items } };
+    return message.channel.send(`Trade offer sent to ${target.username}! They can accept with !tradeaccept`);
+  }
+
+  if (message.content === '!tradeaccept'){
+    const trade = pendingTrades[id];
+    if (!trade) return message.channel.send("No pending trade offer for you!");
+    const fromUser = users[trade.from];
+    const toUser = users[id];
+    const {doubloons, items} = trade.offer;
+
+    // Ensure sender has enough doubloons/items
+    if (fromUser.doubloons < doubloons) return message.channel.send("Sender doesn't have enough doubloons!");
+    for (const item of items){
+      if (!fromUser.items[item]) return message.channel.send(`${trade.from} no longer has ${item}!`);
+    }
+
+    // Execute trade
+    fromUser.doubloons -= doubloons;
+    toUser.doubloons += doubloons;
+    for (const item of items){
+      delete fromUser.items[item];
+      toUser.items[item] = true;
+    }
+    addActivity(users, `💱 <@${trade.from}> traded with <@${id}>`);
+    saveUsers(users);
+    delete pendingTrades[id];
+    return message.channel.send(`Trade completed! 💱`);
+  }
+
+  if (message.content === '!trades'){
+    const tradeList = Object.entries(pendingTrades).map(([to, t]) => `<@${t.from}> ➡ <@${to}> : ${t.offer.doubloons} doubloons, ${t.offer.items.join(',')}`);
+    return message.channel.send(`Pending trades:\n${tradeList.length ? tradeList.join('\n') : "None"}`);
+  }
 });
 
 // --- login ---
