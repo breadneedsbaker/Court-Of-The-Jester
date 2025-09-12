@@ -1,4 +1,3 @@
-Yep! Copy-paste ready full code:
 // index.js — full JesterBot with favor, auto-unlock props & rank-limited trade + tradesystem
 require('dotenv').config();
 const fs = require('fs');
@@ -214,6 +213,22 @@ client.on('messageCreate', async (message) => {
       `🎭 Masks: ${masks.length?masks.join(", "):"None"}`);
   }
 
+  // !help
+  if (message.content === '!help'){
+    return message.channel.send(`🎭 **JesterBot Commands** 🎭
+!join - Join the Court
+!profile - Show your profile
+!daily - Collect daily doubloons
+!buy <item> - Buy masks/props (discounts if favored)
+!gift @user <amount> - Send doubloons to another user
+!givefavor @user <amount> - Give favor (Jester, Hand, Ruler only)
+🃏 React to messages with 🃏 - Give +20 EXP and activity log
+!tradeoffer @user <amount> [item1,...] - Offer a trade
+!tradeaccept - Accept a trade
+!trades - Show pending trades
+!leaderboard - Show top users by EXP, doubloons, or favor`);
+  }
+
   // --- favor system ---
   if (message.content.startsWith('!givefavor')){
     const args = message.content.split(' ').slice(1);
@@ -297,6 +312,7 @@ client.on('messageCreate', async (message) => {
     const tradeList = Object.entries(pendingTrades).map(([to, t]) => `<@${t.from}> ➡ <@${to}> : ${t.offer.doubloons} doubloons, ${t.offer.items.join(',')}`);
     return message.channel.send(`Pending trades:\n${tradeList.length ? tradeList.join('\n') : "None"}`);
   }
+
 });
 
 // --- login ---
