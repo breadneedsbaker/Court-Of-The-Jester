@@ -17,6 +17,7 @@ const client = new Client({
 const USER_FILE = './users.json';
 const MAX_ACTIVITY = 50;
 const DAILY_AMOUNT = 20n; // BigInt
+const DAILY_COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours in ms
 let droppedDoubloons = null;
 let pendingTrades = {}; // { recipientId: { from: senderId, offer: { doubloons:BigInt, items:[string] } } }
 
@@ -213,13 +214,28 @@ client.on('messageCreate', async (message) => {
       `🎭 Masks: ${masks.length?masks.join(", "):"None"}`);
   }
 
+  // !daily
+  if (message.content === '!daily'){
+    if (!users[id]) return message.channel.send("You must !join first.");
+    const now = Date.now();
+    if (now - (users[id].lastDaily || 0) < DAILY_COOLDOWN) {
+      const remaining = Math.ceil((DAILY_COOLDOWN - (now - users[id].lastDaily))/1000/60);
+      return message.channel.send(`⏳ You already collected your daily. Try again in ${remaining} minutes.`);
+    }
+    users[id].doubloons += DAILY_AMOUNT;
+    users[id].lastDaily = now;
+    addActivity(users, `💰 ${message.author.username} collected ${DAILY_AMOUNT} daily doubloons!`);
+    saveUsers(users);
+    return message.channel.send(`💰 You collected your daily ${DAILY_AMOUNT} doubloons!`);
+  }
+
   // !help
   if (message.content === '!help'){
     return message.channel.send(`🎭 **JesterBot Commands** 🎭
 !join - Join the Court
 !profile - Show your profile
 !daily - Collect daily doubloons
-!buy <item> - Buy masks/props (discounts if favored)
+!buy <item> - Buy masks/props
 !gift @user <amount> - Send doubloons to another user
 !givefavor @user <amount> - Give favor (Jester, Hand, Ruler only)
 🃏 React to messages with 🃏 - Give +20 EXP and activity log
@@ -227,6 +243,29 @@ client.on('messageCreate', async (message) => {
 !tradeaccept - Accept a trade
 !trades - Show pending trades
 !leaderboard - Show top users by EXP, doubloons, or favor`);
+  }
+
+  // !leaderboard
+  if (message.content.startsWith('!leaderboard')){
+    const args = message.content.split(' ').slice(1);
+    const type = args[0] || 'exp';
+    const validTypes = ['exp','doubloons','favor'];
+    if (!validTypes.includes(type)) return message.channel.send("Valid leaderboard types: exp, doubloons, favor");
+
+    const sorted = Object.entries(users)
+      .filter(([uid, u])=>uid!==undefined)
+      .sort((a,b)=>{
+        if (type==='doubloons') return (b[1].doubloons||0n)-(a[1].doubloons||0n);
+        return (b[1][type]||0)-(a[1][type]||0);
+      })
+      .slice(0,10);
+
+    let text = `🏆 **Top ${type} users** 🏆\n`;
+    for (let i=0;i<sorted.length;i++){
+      const [uid,u] = sorted[i];
+      text += `${i+1}. <@${uid}> - ${u[type]||0}${type==='doubloons'?' doubloons':''}\n`;
+    }
+    return message.channel.send(text);
   }
 
   // --- favor system ---
@@ -269,7 +308,6 @@ client.on('messageCreate', async (message) => {
     const toUser = users[target.id];
     if (!toUser) return message.channel.send("Target user must join first!");
     
-    // Check item ownership & rank limits
     for (const item of items){
       if (!fromUser.items[item]) return message.channel.send(`You do not own ${item}`);
       const requiredRank = SHOP_ITEMS.props.find(p=>p.name===item)?.rank;
@@ -289,13 +327,11 @@ client.on('messageCreate', async (message) => {
     const toUser = users[id];
     const {doubloons, items} = trade.offer;
 
-    // Ensure sender has enough doubloons/items
     if (fromUser.doubloons < doubloons) return message.channel.send("Sender doesn't have enough doubloons!");
     for (const item of items){
       if (!fromUser.items[item]) return message.channel.send(`${trade.from} no longer has ${item}!`);
     }
 
-    // Execute trade
     fromUser.doubloons -= doubloons;
     toUser.doubloons += doubloons;
     for (const item of items){
@@ -309,13 +345,16 @@ client.on('messageCreate', async (message) => {
   }
 
   if (message.content === '!trades'){
-    const tradeList = Object.entries(pendingTrades).map(([to, t]) => `<@${t.from}> ➡ <@${to}> : ${t.offer.doubloons} doubloons, ${t.offer.items.join(',')}`);
+    const tradeList = Object.entries(pendingTrades)
+      .map(([to, t]) => `<@${t.from}> ➡ <@${to}> : ${t.offer.doubloons} doubloons, ${t.offer.items.join(',')}`);
     return message.channel.send(`Pending trades:\n${tradeList.length ? tradeList.join('\n') : "None"}`);
   }
 
 });
 
 // --- login ---
-client.once('ready',()=>console.log(`🤡 JesterBot online as ${client.user.tag}`));
+client.once('ready', () => {
+  console.log(`🤡 JesterBot online as ${client.user.tag}`);
+});
 if (!process.env.TOKEN || !process.env.OWNER_ID) process.exit(1);
 client.login(process.env.TOKEN);
