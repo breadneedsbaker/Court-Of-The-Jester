@@ -1,7 +1,7 @@
-// index.js — JesterBot fully fixed & complete with boosts, masks, props, favor 
+// index.js — JesterBot fully fixed & complete with boosts, masks, props, favor
 require('dotenv').config();
 const fs = require('fs');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -60,12 +60,12 @@ const RANK_PROPS = {
 const PROP_EFFECTS = {
   "Scepter": { doubloons: 1.15, exp: 1.1, maskBoost: 1.1, drops: 1.1, tradable:false },
   "Crown": { doubloons:1.2, exp:1.15, maskBoost:1.05, drops:1.15, tradable:false },
-  "Royal Decree": { doubloons:1.3, exp:1.2, maskBoost:1.1, drops:1.2, tradable:false, minorLuck:true }
+  "Royal Decree": { doubloons:1.3, exp:1.2, maskBoost:1.1, drops:1.2, minorLuck:true }
 };
 
 // --- favor multiplier ---
 function getFavorMultiplier(favor){
-  return 1 + (favor||0)/100; // each point = +1% boost to everything
+  return 1 + (favor||0)/100; // each point = +1% boost
 }
 
 // --- storage ---
@@ -75,6 +75,7 @@ function loadUsers() {
     const data = JSON.parse(fs.readFileSync(USER_FILE));
     for (const uid in data) {
       if (data[uid].doubloons !== undefined) data[uid].doubloons = BigInt(data[uid].doubloons);
+      if (!data[uid].items) data[uid].items = {};
     }
     return data; 
   } catch {
@@ -162,12 +163,10 @@ function unlockPropsForRank(users, id, newRank){
 // --- calculate boosts ---
 function calculateBoosts(user){
   let expBoost = 1, doubloonsBoost = 1, maskBoost = 1, dropBoost = 1, minorLuck=false;
-  // masks
   for (const mask of Object.keys(user.items)){
     const m = SHOP_ITEMS.masks.find(m=>m.name===mask);
     if (m) maskBoost *= m.boost;
   }
-  // props
   for (const prop of Object.keys(user.items)){
     if (PROP_EFFECTS[prop]){
       const eff = PROP_EFFECTS[prop];
@@ -178,13 +177,11 @@ function calculateBoosts(user){
       if (eff.minorLuck) minorLuck = true;
     }
   }
-  // favor
   const favorMul = getFavorMultiplier(user.favor||0);
   expBoost *= favorMul;
   doubloonsBoost *= favorMul;
   maskBoost *= favorMul;
   dropBoost *= favorMul;
-
   return {expBoost, doubloonsBoost, maskBoost, dropBoost, minorLuck};
 }
 
@@ -197,7 +194,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
   const users = loadUsers();
   const targetId = reaction.message.author.id;
-  if (!users[targetId]) users[targetId] = {exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
+  if (!users[targetId]) users[targetId] = {rank:"Motley",exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
 
   const boosts = calculateBoosts(users[targetId]);
   users[targetId].exp += Math.floor(20 * boosts.expBoost);
@@ -216,23 +213,20 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const users = loadUsers();
   const id = message.author.id;
-  const content = message.content.toLowerCase();
+  const content = message.content.trim().toLowerCase();
   const isPrivileged = message.member?.roles?.cache?.some(r => ["Ruler","The Jester's Hand"].includes(r.name)) || id === JESTER_ID;
 
   // --- !join
   if (content.startsWith('!join')){
-    let member = message.member;
-    if (!member && message.guild) {
-      try { member = await message.guild.members.fetch(id); }
-      catch { return message.channel.send("Could not fetch your server member info!"); }
-    }
     if (!users[id]){
       users[id] = { rank:"Motley", exp:0, doubloons:10n, favor:0, items:{}, lastDaily:0 };
       addActivity(users, `🎭 ${message.author.username} joined the Court!`);
       saveUsers(users);
-      if (message.guild && member) {
+
+      if (message.guild) {
         await setupRoles(message.guild);
-        await assignRole(member, "Motley");
+        const member = await getGuildMember(message.guild, id);
+        if (member) await assignRole(member, "Motley");
       }
       return message.channel.send(`🎭 Welcome ${message.author.username}! You are now a Motley 😜`);
     } else return message.channel.send("You are already in the Court!");
@@ -260,7 +254,7 @@ client.on('messageCreate', async (message) => {
     const boosts = calculateBoosts(users[id]);
     users[id].doubloons += BigInt(Math.floor(Number(DAILY_AMOUNT)*boosts.doubloonsBoost));
     users[id].lastDaily = now;
-    addActivity(users, `💰 ${message.author.username} collected daily ${DAILY_AMOUNT} doubloons!`);
+    addActivity(users, `💰 ${message.author.username} collected daily doubloons!`);
     saveUsers(users);
     return message.channel.send(`💰 You collected your daily ${Math.floor(Number(DAILY_AMOUNT)*boosts.doubloonsBoost)} doubloons!`);
   }
@@ -268,19 +262,16 @@ client.on('messageCreate', async (message) => {
   // --- !buy
   if (content.startsWith('!buy ')){
     if (!users[id]) return message.channel.send("You must !join first.");
-    const args = message.content.split(' ').slice(1);
-    const itemName = args.join(' ');
+    const itemName = message.content.split(' ').slice(1).join(' ');
     const item = SHOP_ITEMS.masks.find(m => m.name.toLowerCase()===itemName.toLowerCase()) || SHOP_ITEMS.props.find(p => p.name.toLowerCase()===itemName.toLowerCase());
     if (!item) return message.channel.send("Item not found.");
     let price = item.price||0n;
-    const boosts = calculateBoosts(users[id]);
-    price = BigInt(Math.floor(Number(price)*boosts.doubloonsBoost));
-    if (users[id].doubloons < price) return message.channel.send("Not enough doubloons.");
-    users[id].doubloons -= price;
+    if (typeof price === 'bigint' && users[id].doubloons < price) return message.channel.send("Not enough doubloons.");
+    if (typeof price === 'bigint') users[id].doubloons -= price;
     users[id].items[item.name] = true;
     addActivity(users, `🛒 ${message.author.username} bought ${item.name}!`);
     saveUsers(users);
-    return message.channel.send(`🛒 You bought ${item.name} for ${price} doubloons!`);
+    return message.channel.send(`🛒 You bought ${item.name}!`);
   }
 
   // --- !gift
@@ -290,11 +281,10 @@ client.on('messageCreate', async (message) => {
     const amount = BigInt(content.split(' ')[2]||0);
     if (!users[id]) return message.channel.send("You must !join first.");
     if (users[id].doubloons < amount) return message.channel.send("Not enough doubloons.");
-    if (!users[mention.id]) users[mention.id]={exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
+    if (!users[mention.id]) users[mention.id]={rank:"Motley",exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
     users[id].doubloons -= amount;
-    const boosts = calculateBoosts(users[id]);
-    users[mention.id].doubloons += BigInt(Math.floor(Number(amount)*boosts.doubloonsBoost));
-    users[mention.id].exp += Math.floor(10 * boosts.expBoost); // small bonus for receiving gift
+    users[mention.id].doubloons += amount;
+    users[mention.id].exp += 10;
     addActivity(users, `🎁 ${message.author.username} gifted ${amount} doubloons to ${mention.username}`);
     saveUsers(users);
     return message.channel.send(`🎁 You gifted ${amount} doubloons to ${mention.username}`);
@@ -306,14 +296,14 @@ client.on('messageCreate', async (message) => {
     const mention = message.mentions.users.first();
     if (!mention) return message.channel.send("Mention a user.");
     let amount = parseInt(content.split(' ')[2]||0);
-    if (!users[mention.id]) users[mention.id]={exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
+    if (!users[mention.id]) users[mention.id]={rank:"Motley",exp:0,doubloons:0n,favor:0,items:{},lastDaily:0};
     users[mention.id].favor = Math.min(100,(users[mention.id].favor||0) + amount);
     addActivity(users, `⭐ ${message.author.username} gave ${amount} favor to ${mention.username}`);
     saveUsers(users);
     return message.channel.send(`⭐ You gave ${amount} favor to ${mention.username}`);
   }
 
-  // --- !trade
+  // --- trades ---
   if (content.startsWith('!trade ')){
     const mention = message.mentions.users.first();
     if (!mention) return message.channel.send("Mention a user to trade with.");
@@ -363,7 +353,16 @@ client.on('messageCreate', async (message) => {
 
   // --- !help
   if (content === '!help'){
-    return message.channel.send("Commands: !join, !profile, !daily, !buy <item>, !gift <user> <amount>, !givefavor <user> <amount>, !trade <user> <amount/items>, !tradeaccept, !trades, !leaderboard, !help");
+    const embed = new EmbedBuilder()
+      .setTitle("🤡 JesterBot Commands")
+      .setColor("#e67e22")
+      .addFields(
+        {name:"Player Commands", value:"`!join`, `!profile`, `!daily`, `!buy <item>`, `!gift <user> <amount>`, `!trade <user> <amount/items>`, `!tradeaccept`, `!trades`"},
+        {name:"Info Commands", value:"`!leaderboard`, `!help`"},
+        {name:"Admin / Elite", value:"`!givefavor <user> <amount>`"}
+      )
+      .setFooter({text:"Gain EXP from 🃏 reactions, gifts, and trades!"});
+    return message.channel.send({embeds:[embed]});
   }
 
   saveUsers(users);
